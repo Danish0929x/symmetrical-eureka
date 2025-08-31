@@ -66,7 +66,7 @@ router.get(
     scope: ["name", "email"],
   })
 );
-router.post(
+router.get(
   "/apple/callback",
   passport.authenticate("apple", {
     failureRedirect: "/login",
