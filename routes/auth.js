@@ -75,4 +75,13 @@ router.get(
   authController.appleSuccess
 );
 
+router.post(
+  "/apple/callback",
+  passport.authenticate("apple", {
+    failureRedirect: "/login",
+    session: false
+  }),
+  authController.appleSuccess
+);
+
 module.exports = router
