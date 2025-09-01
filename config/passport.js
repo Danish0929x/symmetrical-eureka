@@ -1,5 +1,6 @@
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const AppleStrategy = require("passport-apple").Strategy;
+const jwt = require('jsonwebtoken');
 const User = require("../models/User");
 
 module.exports = (passport) => {
@@ -80,42 +81,72 @@ module.exports = (passport) => {
       },
       async (req, accessToken, refreshToken, idToken, profile, done) => {
         try {
-          console.log("Apple OAuth Debug:");
+          console.log("=== Apple OAuth Debug ===");
           console.log("Profile:", JSON.stringify(profile, null, 2));
-          console.log("ID Token payload:", idToken);
-          console.log("Request body:", req.body);
+          console.log("ID Token (raw):", idToken);
+          console.log("Request body:", JSON.stringify(req.body, null, 2));
           
-          // Apple sends data differently - extract from ID token and request body
+          // Properly decode the Apple ID Token
+          let decodedToken;
+          try {
+            // Apple ID tokens are JWTs - decode without verification for data extraction
+            decodedToken = jwt.decode(idToken);
+            console.log("Decoded ID Token:", JSON.stringify(decodedToken, null, 2));
+          } catch (decodeError) {
+            console.error("Failed to decode Apple ID token:", decodeError);
+            return done(new Error("Invalid Apple ID token"), null);
+          }
+
+          // Extract data from multiple sources
           let email, appleId, name;
           
-          // Get Apple ID from ID token (this is the reliable source)
-          if (idToken && idToken.sub) {
-            appleId = idToken.sub;
-            email = idToken.email; // Email from ID token
+          // 1. Get Apple ID (subject) - this should always be present
+          appleId = decodedToken?.sub;
+          if (!appleId) {
+            console.error("No Apple ID (sub) found in decoded token");
+            return done(new Error("Apple ID not found in token"), null);
           }
           
-          // Get user data from form submission (first-time login only)
+          // 2. Get email - check multiple sources
+          email = decodedToken?.email || profile?.email;
+          
+          // 3. Get name - Apple only sends this on FIRST authorization
+          // Check request body for user data (first-time only)
           if (req.body?.user) {
             try {
-              const userData = JSON.parse(req.body.user);
-              email = email || userData.email;
+              const userData = typeof req.body.user === 'string' 
+                ? JSON.parse(req.body.user) 
+                : req.body.user;
+              
+              console.log("Parsed Apple user data:", userData);
+              
               if (userData.name) {
-                name = `${userData.name.firstName || ''} ${userData.name.lastName || ''}`.trim();
+                const firstName = userData.name.firstName || '';
+                const lastName = userData.name.lastName || '';
+                name = `${firstName} ${lastName}`.trim();
               }
+              
+              // Email might also be here
+              email = email || userData.email;
             } catch (parseError) {
-              console.log("Error parsing user data:", parseError);
+              console.log("Error parsing Apple user data:", parseError);
             }
           }
           
-          // Fallbacks
-          name = name || email?.split('@')[0] || 'Apple User';
+          // Fallbacks for missing data
+          if (!email) {
+            console.warn("No email provided by Apple - this should not happen if email scope was requested");
+            // Apple should provide email if requested in scope
+            email = `apple_${appleId}@privaterelay.appleid.com`;
+          }
           
-          if (!appleId) {
-            console.error("No Apple ID found in ID token");
-            return done(new Error("Apple ID not found in authentication response"), null);
+          if (!name) {
+            // Try to get name from existing user or use fallback
+            const existingUser = await User.findOne({ appleId });
+            name = existingUser?.name || email.split('@')[0] || 'Apple User';
           }
 
-          console.log(`Processing Apple login for: ${email} (ID: ${appleId})`);
+          console.log(`Final extracted data - ID: ${appleId}, Email: ${email}, Name: ${name}`);
 
           // 1. Check for existing Apple user
           let user = await User.findOneAndUpdate(
@@ -125,12 +156,12 @@ module.exports = (passport) => {
           ).select('+authMethods');
 
           if (user) {
-            console.log("Found existing Apple user");
+            console.log("Found existing Apple user:", user._id);
             return done(null, user);
           }
 
-          // 2. Check for existing email user (if email available)
-          if (email) {
+          // 2. Check for existing email user (link accounts)
+          if (email && !email.includes('apple_')) {
             user = await User.findOneAndUpdate(
               { email },
               {
@@ -145,7 +176,7 @@ module.exports = (passport) => {
             ).select('+authMethods');
 
             if (user) {
-              console.log("Linked Apple to existing email user");
+              console.log("Linked Apple to existing email user:", user._id);
               return done(null, user);
             }
           }
@@ -155,7 +186,7 @@ module.exports = (passport) => {
           user = await User.create({
             appleId: appleId,
             name: name,
-            email: email || `apple_${appleId}@example.com`, // Fallback email
+            email: email,
             authMethods: ["apple"],
             isEmailVerified: true,
             lastLogin: new Date()
