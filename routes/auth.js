@@ -50,26 +50,38 @@ router.get(
     prompt: "select_account"
   })
 );
+
 router.get(
   "/google/callback",
   passport.authenticate("google", { 
-    failureRedirect: "/login",
+    failureRedirect: `${process.env.CLIENT_URL}/login?error=google_auth_failed`,
     session: false
    }),
   authController.googleSuccess,
 )
 
-// Apple OAuth routes
+// Apple OAuth routes with improved error handling
 router.get(
   "/apple",
+  (req, res, next) => {
+    console.log("Starting Apple OAuth flow");
+    next();
+  },
   passport.authenticate("apple", {
     scope: ["name", "email"],
   })
 );
+
+// Apple callback - handle both GET and POST
 router.get(
   "/apple/callback",
+  (req, res, next) => {
+    console.log("Apple GET callback hit");
+    console.log("Query params:", req.query);
+    next();
+  },
   passport.authenticate("apple", {
-    failureRedirect: "/login",
+    failureRedirect: `${process.env.CLIENT_URL}/login?error=apple_auth_failed`,
     session: false
   }),
   authController.appleSuccess
@@ -77,11 +89,31 @@ router.get(
 
 router.post(
   "/apple/callback",
+  (req, res, next) => {
+    console.log("Apple POST callback hit");
+    console.log("Body:", req.body);
+    next();
+  },
   passport.authenticate("apple", {
-    failureRedirect: "/login",
+    failureRedirect: `${process.env.CLIENT_URL}/login?error=apple_auth_failed`,
     session: false
   }),
   authController.appleSuccess
 );
+
+// Add error handling middleware for OAuth routes
+router.use((error, req, res, next) => {
+  console.error("OAuth Error:", error);
+  
+  if (req.originalUrl.includes('/auth/apple')) {
+    return res.redirect(`${process.env.CLIENT_URL}/login?error=apple_oauth_error&details=${encodeURIComponent(error.message)}`);
+  }
+  
+  if (req.originalUrl.includes('/auth/google')) {
+    return res.redirect(`${process.env.CLIENT_URL}/login?error=google_oauth_error&details=${encodeURIComponent(error.message)}`);
+  }
+  
+  next(error);
+});
 
 module.exports = router
