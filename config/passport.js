@@ -82,41 +82,37 @@ module.exports = (passport) => {
         try {
           console.log("Apple OAuth Debug:");
           console.log("Profile:", JSON.stringify(profile, null, 2));
-          console.log("ID Token:", idToken);
+          console.log("ID Token payload:", idToken);
+          console.log("Request body:", req.body);
           
-          // Apple's profile structure is different
+          // Apple sends data differently - extract from ID token and request body
           let email, appleId, name;
           
-          if (profile) {
-            appleId = profile.sub || profile.id;
-            email = profile.email;
-            
-            // Handle name from profile or form data
-            if (profile.name) {
-              if (typeof profile.name === 'string') {
-                name = profile.name;
-              } else {
-                name = `${profile.name.firstName || ''} ${profile.name.lastName || ''}`.trim();
-              }
-            }
+          // Get Apple ID from ID token (this is the reliable source)
+          if (idToken && idToken.sub) {
+            appleId = idToken.sub;
+            email = idToken.email; // Email from ID token
           }
           
-          // Fallback: get data from form submission (first-time Apple login)
+          // Get user data from form submission (first-time login only)
           if (req.body?.user) {
-            const userData = JSON.parse(req.body.user);
-            email = email || userData.email;
-            if (userData.name && !name) {
-              name = `${userData.name.firstName || ''} ${userData.name.lastName || ''}`.trim();
+            try {
+              const userData = JSON.parse(req.body.user);
+              email = email || userData.email;
+              if (userData.name) {
+                name = `${userData.name.firstName || ''} ${userData.name.lastName || ''}`.trim();
+              }
+            } catch (parseError) {
+              console.log("Error parsing user data:", parseError);
             }
           }
           
-          // Final fallbacks
-          appleId = appleId || profile?.sub;
+          // Fallbacks
           name = name || email?.split('@')[0] || 'Apple User';
           
           if (!appleId) {
-            console.error("No Apple ID found in profile");
-            return done(new Error("Apple ID not found"), null);
+            console.error("No Apple ID found in ID token");
+            return done(new Error("Apple ID not found in authentication response"), null);
           }
 
           console.log(`Processing Apple login for: ${email} (ID: ${appleId})`);
